@@ -1,20 +1,10 @@
-#!/usr/bin/php
 <?php
  
- // create-daemon.php
+ // officebot-controller.php
  // created 2011-09-08 by alaina hardie, 9th sense robotics
  // mountain view, ca
 
 require_once('officebot-include.php'); 
-
-include 'XMPPHP/XMPP.php';
-
-#Use XMPPHP_Log::LEVEL_VERBOSE to get more logging for error reports
-#If this doesn't work, are you running 64-bit PHP with < 5.2.6?
-$conn = new XMPPHP_XMPP('talk.google.com', 5222, 'spottersu', 'spotGSP11', 'xmpphp', 'gmail.com', $printlog=true, $loglevel=XMPPHP_Log::LEVEL_INFO);
-$conn->autoSubscribe();
-
-$vcard_request = array();
 
 function create_update_status ($fh)
 // get the Create's status (battery capacity, etc.)
@@ -121,21 +111,40 @@ function create_left($roomba)
 	global $current_state;
 	$current_state = 'l';
 	
-    create_drive($roomba, 0x00c8, 0x0001); # 0x01f4= 200 mm/s, 0x0001=spinleft
+    create_drive($roomba, 0x01f4, 0x0001); # 0x01f4= 200 mm/s, 0x0001=spinleft
 }
 function create_right($roomba) 
 {
 	global $current_state;
 	$current_state = 'r';
 	
-    create_drive($roomba, 0x00C8, 0xffff); # 0x01f4= 200 mm/s, 0xffff=spinright
+    create_drive($roomba, 0x01f4, 0xffff); # 0x01f4= 200 mm/s, 0xffff=spinright
 }
 function create_stop($roomba) 
 {
 	global $current_state;
 	$current_state = 's';
+	
     create_drive($roomba, 0x0000, 0x0000); # 0x01f4= 200 mm/s, 0xffff=spinright
 }
+
+
+$r = mysql_query("select * from $createActionTable");
+// make sure there's only one row in the create action table
+if (mysql_num_rows($r) != 1)
+{
+	mysql_query("delete from $createActionTable");
+	mysql_query("insert into $createActionTable (command, last_update) values ('s', " . microtime(true) . ");");
+}
+
+$r = mysql_query("select * from $pantiltActionTable");
+// make sure there's only one row in the pantilt action table
+if (mysql_num_rows($r) != 1)
+{
+	mysql_query("delete from $pantiltActionTable");
+	mysql_query("insert into $pantiltActionTable (command, last_update) values ('s', " . microtime(true) . ");");
+}
+
 
 
 system ("stty -F $arduinoPort 9600 raw -parenb -parodd cs8 -hupcl -cstopb clocal");
@@ -148,185 +157,100 @@ if (!$arduinoFp)
 
 fwrite($arduinoFp, 'y');
 sleep (1);
-// system ("stty -F $createPort 57600 raw -parenb -parodd cs8 -hupcl -cstopb clocal");
-// if (!$createFp = fopen ($createPort, 'w+'))
-// {
-// 	echo (json_encode(array('ret' => $createPort . ' base open failed')));
-// 	exit;
-// }
+system ("stty -F $createPort 57600 raw -parenb -parodd cs8 -hupcl -cstopb clocal");
+if (!$createFp = fopen ($createPort, 'w+'))
+{
+	echo (json_encode(array('ret' => $createPort . ' base open failed')));
+	exit;
+}
 
 $current_state = 's';
 
 // one infinite loop (ha ha, get it?)
 $count = 0;
-$stopped = 1;
-try {
-    $conn->connect();	
-	while (!$conn->isDisconnected())
+while (1)
+{
+	$count ++;
+	if ($count % 30)
 	{
-    	$payloads = $conn->processUntil(array('message', 'presence', 'end_stream', 'session_start', 'vcard'));
-    	foreach($payloads as $event) {
-    		$pl = $event[1];
-    		if ($event[0] == 'session_start')
-    		{
-				$conn->getRoster();
-				$conn->presence($status="Cheese!");
-    		}
+		create_update_status ($createFp);
+	}
+	$createResult = mysql_query("select * from $createActionTable");
+	if (mysql_num_rows($createResult) != 1) // epic fail. too many (or too few) rows.
+	{
+		syslog(LOG_NOTICE, "Incorrect number of rows in $createActionTable: " .mysql_num_rows()); 
+		exit;
+	}
+	$createArray = mysql_fetch_assoc($createResult); // get the row
 
-			$cmd = explode(' ', $pl['body']);
-			if($cmd[0] == 'quit') $conn->disconnect();
-			if($cmd[0] == 'break') $conn->send("</end>");
-    		switch($event[0]) {
-    			case 'message': 
-    				print "---------------------------------------------------------------------------------\n";
-    				print "Message from: {$pl['from']}\n";
-    				if($pl['subject']) print "Subject: {$pl['subject']}\n";
-    				print $pl['body'] . "\n";
-    				print "---------------------------------------------------------------------------------\n";
-    				$conn->message($pl['from'], $body="Thanks for sending me \"{$pl['body']}\".", $type=$pl['type']);
-					$cmd = explode(' ', $pl['body']);
-					print "command is {$cmd[0]}\n";
-// 					switch($cmd[0]) 
-// 					{
-// 						case 'cf': // move it forward
-// 							print "move it forward\n";
-// 							create_forward($createFp);
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								sleep ($cmd[1]);
-// 							} else {
-// 								sleep (1);
-// 							}
-// 							create_stop();
-// 							break;
-// 						case 'cb': // back it on up
-// 							create_backward($createFp);
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								sleep ($cmd[1]);
-// 							} else {
-// 								sleep (1);
-// 							}
-// 							create_stop();
-// 							break;
-// 						case 'cl': // turn to the left
-// 							create_left($createFp);
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								sleep ($cmd[1]);
-// 							} else {
-// 								sleep (1);
-// 							}
-// 							create_stop();
-// 							break;
-// 						case 'cr': // turn to the right
-// 							create_right($createFp);
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								sleep ($cmd[1]);
-// 							} else {
-// 								sleep (1);
-// 							}
-// 							create_stop();
-// 							break;
-// 						case 'cs': // stop movement
-// 							echo 'stop command sent: ' . microtime(true) . " $elapsed_time $timeout_time stopped $stopped\n";
-// 							create_stop($createFp);
-// 							$stopped = 1;
-// 							break;
-// 						case 'pl': // pan left
-// 							$acmd = 'a';
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								$mult = $cmd[1] * 3;
-// 							} else {
-// 								$mult = 3;
-// 							}
-// 							fwrite($arduinoFp, $acmd . $acmd . $acmd, $mult);
-// 							break;
-// 						case 'pr': // pan right
-// 							$acmd = 'd';
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								$mult = $cmd[1] * 3;
-// 							} else {
-// 								$mult = 3;
-// 							}
-// 							fwrite($arduinoFp, $acmd . $acmd . $acmd, $mult);
-// 							break;
-// 						case 'pu': // tilt up
-// 							$acmd = 'w';
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								$mult = $cmd[1] * 3;
-// 							} else {
-// 								$mult = 3;
-// 							}
-// 							fwrite($arduinoFp, $acmd . $acmd . $acmd, $mult);
-// 							break;
-// 						case 'pd': // tilt down
-// 							$acmd = 's';
-// 							if (is_numeric($cmd[1]))
-// 							{
-// 								$mult = $cmd[1] * 3;
-// 							} else {
-// 								$mult = 3;
-// 							}
-// 							fwrite($arduinoFp, $acmd . $acmd . $acmd, $mult);
-// 							break;
-// 						default:
-// 							$acmd = NULL;
-// 							break;
-// 					} // endswitch
-	   				if($cmd[0] == 'quit') $conn->disconnect();
-    				if($cmd[0] == 'break') $conn->send("</end>");
-    				if($cmd[0] == 'vcard') {
-						if(!($cmd[1])) $cmd[1] = $conn->user . '@' . $conn->server;
-						// take a note which user requested which vcard
-						$vcard_request[$pl['from']] = $cmd[1];
-						// request the vcard
-						$conn->getVCard($cmd[1]);
-					// else added ALH 2011-09-08	
-					} else {
- 						fwrite($arduinoFp, $cmd[0]);
-					}
-    			break;
-    			case 'presence':
-    				print "Presence: {$pl['from']} [{$pl['show']}] {$pl['status']}\n";
-    			break;
-    			case 'session_start':
-    			    print "Session Start\n";
-			    	$conn->getRoster();
-    				$conn->presence($status="Cheese!");
-    			break;
-				case 'vcard':
-					// check to see who requested this vcard
-					$deliver = array_keys($vcard_request, $pl['from']);
-					// work through the array to generate a message
-					print_r($pl);
-					$msg = '';
-					foreach($pl as $key => $item) {
-						$msg .= "$key: ";
-						if(is_array($item)) {
-							$msg .= "\n";
-							foreach($item as $subkey => $subitem) {
-								$msg .= "  $subkey: $subitem\n";
-							}
-						} else {
-							$msg .= "$item\n";
-						}
-					}
-					// deliver the vcard msg to everyone that requested that vcard
-					foreach($deliver as $sendjid) {
-						// remove the note on requests as we send out the message
-						unset($vcard_request[$sendjid]);
-    					$conn->message($sendjid, $msg, 'chat');
-					}
+	$elapsed_time = microtime(true) - $createArray['last_update'];
+	
+	//echo microtime(true) . " {$createArray['last_update']} $timeout_time " . $elapsed_time . "\n"; 
+	//echo "{$createArray['command']}, {$createArray['last_update']}, $elapsed_time\n";
+	if ($elapsed_time > $timeout_time)
+	{
+		// we've gone too long without an update, so send a stop command.
+		create_stop($createFp);
+		//echo "stopping\n";
+		//mysql_query("update $createActionTable set command =  's', last_update = " . microtime (true)); 
+
+	} else {
+		// we're within the timeout period, so do what we're telling you.
+		switch ($createArray['command'])
+		{
+			case 'f': // move it forward
+				create_forward($createFp);
 				break;
-			} // endswitch
-		} // end foreach
-	} // endwhile
-} catch(XMPPHP_Exception $e) {
-    die($e->getMessage());
-}
+			case 'b': // back it on up
+				create_backward($createFp);
+				break;
+			case 'l': // turn to the left
+				create_left($createFp);
+				break;
+			case 'r': // turn to the right
+				create_right($createFp);
+				break;
+			case 's': // stop movement
+				create_stop($createFp);
+				break;
+		} // endswitch
+		//echo $createArray['command'] . "\n";
+	} // endif
+
+	$arduinoResult = mysql_query("select * from $pantiltActionTable");
+	if (mysql_num_rows($arduinoResult) != 1) // epic fail. too many (or too few) rows.
+	{
+		syslog(LOG_NOTICE, "Incorrect number of rows in $pantiltActionTable: " .mysql_num_rows()); 
+		exit;
+	}
+	$arduinoArray = mysql_fetch_assoc($arduinoResult); // get the row
+
+	if ($arduinoArray['command'] != "x") 
+	// if it's anything other than "stay", it's a movement command, so update the row to clear that
+	{
+		echo $arduinoArray['command'];
+		switch ($arduinoArray['command'])
+		{
+			case 'l': // pan left
+				$acmd = 'a';
+				break;
+			case 'r': // pan right
+				$acmd = 'd';
+				break;
+			case 'u': // tilt up
+				$acmd = 'w';
+				break;
+			case 'd': // tilt down
+				$acmd = 's';
+				break;
+			default:
+				$acmd = NULL;
+				break;
+		}
+		echo $acmd;
+		fwrite($arduinoFp, $acmd . $acmd . $acmd, 3);
+		mysql_query ("update $pantiltActionTable SET command = 'x'");
+		usleep (500);
+	}
+} // endwhile
 ?>
